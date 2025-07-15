@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI 스마트 여행 플래너</title>
+    <link rel="stylesheet" href="/static/css/style.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700&family=Poppins:wght@600&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div class="container">
+      <header>
+        <h1>✈️ AI 스마트 여행 플래너</h1>
+        <p>
+          가고 싶은 곳과 여행 스타일을 알려주시면, AI가 맞춤 여행 경로를 추천해
+          드려요.
+        </p>
+      </header>
+
+      <main>
+        <form id="travel-form">
+          <div class="form-grid">
+            <div class="form-group full-width">
+              <label for="destination">어디로 떠나고 싶으신가요?</label>
+              <input
+                type="text"
+                id="destination"
+                name="destination"
+                placeholder="예: 스위스 인터라켄"
+                required
+              />
+            </div>
+            <div class="form-group">
+              <label for="duration">여행 기간</label>
+              <input
+                type="text"
+                id="duration"
+                name="duration"
+                placeholder="예: 3박 4일"
+                required
+              />
+            </div>
+            <div class="form-group">
+              <label for="headcount">인원수</label>
+              <select id="headcount" name="headcount">
+                <option value="혼자">혼자</option>
+                <option value="2명">2명</option>
+                <option value="3~4명">3~4명</option>
+                <option value="5명 이상">5명 이상</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="gender">성별</label>
+              <select id="gender" name="gender">
+                <option value="상관없음">상관없음</option>
+                <option value="남성">남성</option>
+                <option value="여성">여성</option>
+                <option value="혼성">혼성</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="age">나이대</label>
+              <select id="age" name="age">
+                <option value="20대">20대</option>
+                <option value="30대">30대</option>
+                <option value="40대">40대</option>
+                <option value="50대 이상">50대 이상</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="style">여행 스타일</label>
+              <select id="style" name="style">
+                <option value="휴양/힐링">휴양/힐링</option>
+                <option value="커플 여행">커플 여행</option>
+                <option value="가족 여행">가족 여행</option>
+                <option value="액티비티/모험">액티비티/모험</option>
+                <option value="문화/역사 탐방">문화/역사 탐방</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="budget">예산 (1인 기준)</label>
+              <select id="budget" name="budget">
+                <option value="100만원 이하">100만원 이하</option>
+                <option value="200만원 이하">200만원 이하</option>
+                <option value="300만원 이하">300만원 이하</option>
+                <option value="넉넉하게">넉넉하게</option>
+              </select>
+            </div>
+          </div>
+          <button type="submit" id="submit-btn">
+            나만의 여행 경로 추천받기
+          </button>
+        </form>
+
+        <div id="loading-indicator" class="hidden">
+          <div class="spinner"></div>
+          <p>최고의 여행 경로를 만들고 있어요... 잠시만 기다려주세요!</p>
+        </div>
+
+        <div id="result-container" class="hidden">
+          <h2>📝 AI 추천 여행 경로</h2>
+          <div id="result-content"></div>
+        </div>
+      </main>
+    </div>
+
+    <script>
+      const form = document.getElementById("travel-form");
+      const submitBtn = document.getElementById("submit-btn");
+      const loadingIndicator = document.getElementById("loading-indicator");
+      const resultContainer = document.getElementById("result-container");
+      const resultContent = document.getElementById("result-content");
+
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        loadingIndicator.classList.remove("hidden");
+        resultContainer.classList.add("hidden");
+        submitBtn.disabled = true;
+
+        const formData = new FormData(form);
+        const data = Object.fromEntries(formData.entries());
+
+        try {
+          const response = await fetch("/api/recommend", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(data),
+          });
+
+          if (!response.ok) {
+            throw new Error(
+              "서버에서 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
+            );
+          }
+
+          const result = await response.json();
+          // Gemini가 생성한 마크다운 형식의 텍스트를 HTML로 보기 좋게 변환합니다.
+          const formattedResult = result.recommendation
+            .replace(/### (.*)/g, "<h3>$1</h3>")
+            .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+            .replace(/\n/g, "<br>");
+
+          resultContent.innerHTML = formattedResult;
+          resultContainer.classList.remove("hidden");
+        } catch (error) {
+          resultContent.innerHTML = `<p style="color: red;">${error.message}</p>`;
+          resultContainer.classList.remove("hidden");
+        } finally {
+          loadingIndicator.classList.add("hidden");
+          submitBtn.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>

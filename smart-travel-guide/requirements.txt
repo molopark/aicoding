@@ -1,0 +1,10 @@
+# Web Framework & ASGI Server
+# 설치 : pip install -r requirements.txt
+# 새로운 패키지 추가시 최신상태로 업데이트 : pip freeze > requirements.txt
+fastapi
+uvicorn[standard]
+
+# Google APIs & Utilities
+gspread
+google-generativeai
+python-dotenv

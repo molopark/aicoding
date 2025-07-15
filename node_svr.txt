@@ -1,0 +1,165 @@
+// server.js
+
+const express = require('express');
+const { GoogleAuth } = require('google-auth-library');
+const { google } = require('googleapis');
+const axios = require('axios');
+const path = require('path');
+require('dotenv').config(); // .env 파일 로드
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// 미들웨어 설정
+app.use(express.json()); // JSON 요청 본문 파싱
+app.use(express.static(path.join(__dirname, 'public'))); // 정적 파일 서비스 (HTML, CSS, JS)
+
+// 환경 변수 로드
+const GOOGLE_SHEETS_ID = process.env.GOOGLE_SHEETS_ID;
+const GOOGLE_SERVICE_ACCOUNT_KEY_PATH = process.env.GOOGLE_SERVICE_ACCOUNT_KEY_PATH;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
+const SHEET_NAME = process.env.SHEET_NAME;
+
+let sheetsClient;
+
+// Google Sheets API 인증 및 클라이언트 초기화 함수
+async function initializeSheetsClient() {
+    try {
+        const auth = new GoogleAuth({
+            keyFile: GOOGLE_SERVICE_ACCOUNT_KEY_PATH,
+            scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+        });
+        sheetsClient = google.sheets({ version: 'v4', auth });
+        console.log('Google Sheets Client initialized successfully.');
+    } catch (error) {
+        console.error('Error initializing Google Sheets Client:', error);
+        process.exit(1); // 초기화 실패 시 앱 종료
+    }
+}
+
+// 앱 시작 시 Google Sheets 클라이언트 초기화
+initializeSheetsClient();
+
+
+// 루트 경로 요청 시 index.html 서빙
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// 여행 경로 추천 API 엔드포인트
+app.post('/api/recommend-itinerary', async (req, res) => {
+    const startTime = new Date();
+    const formData = req.body;
+    let itinerary = "추천 경로를 생성할 수 없습니다. 다시 시도해주세요.";
+    let successStatus = false;
+    let errorMessage = "";
+
+    try {
+        const { destination, numTravelers, gender, ageGroup, travelStyle, travelDays, budget } = formData;
+
+        // Gemini API에 보낼 프롬프트 생성
+        const prompt = `
+            "${destination}"(으)로 ${numTravelers}명의 ${gender}, ${ageGroup} ${travelStyle} 여행을 계획 중입니다.
+            총 ${travelDays}일 동안의 여행이며, 인당 예산은 ${budget}입니다.
+            각 일자별로 상세한 추천 여행 경로를 제공해주세요.
+            답변은 각 일자별로 제목을 포함하고, 활동, 식사, 숙소 등을 구체적으로 명시해주세요.
+            여행의 특징과 추천하는 이유를 간략하게 덧붙여주세요.
+            예시 형식:
+            ---
+            Day 1: [장소] 탐험
+            - 오전: [활동]
+            - 점심: [음식/장소]
+            - 오후: [활동]
+            - 저녁: [음식/장소]
+            - 숙소: [종류/이름]
+            특징: ...
+
+            Day 2: [장소] 즐기기
+            - 오전: ...
+            ---
+        `;
+
+        // Gemini API 호출
+        const geminiResponse = await axios.post(
+            `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
+            {
+                contents: [{ parts: [{ text: prompt }] }],
+            },
+            {
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+            }
+        );
+
+        if (geminiResponse.data && geminiResponse.data.candidates && geminiResponse.data.candidates[0] && geminiResponse.data.candidates[0].content && geminiResponse.data.candidates[0].content.parts && geminiResponse.data.candidates[0].content.parts[0]) {
+            itinerary = geminiResponse.data.candidates[0].content.parts[0].text;
+            successStatus = true;
+        } else if (geminiResponse.data && geminiResponse.data.error) {
+            errorMessage = `Gemini API 오류: ${geminiResponse.data.error.message}`;
+        } else {
+            errorMessage = `Gemini API 응답 형식 오류: ${JSON.stringify(geminiResponse.data)}`;
+        }
+
+    } catch (error) {
+        console.error('Error during itinerary recommendation:', error);
+        if (error.response) {
+            errorMessage = `Gemini API 호출 중 오류가 발생했습니다: ${error.response.status} - ${error.response.data.error ? error.response.data.error.message : JSON.stringify(error.response.data)}`;
+        } else {
+            errorMessage = `서버 오류 발생: ${error.message}`;
+        }
+    } finally {
+        // Google 시트에 결과 기록 (성공/실패 여부와 관계없이)
+        await recordToSheet(startTime, formData, itinerary, successStatus, errorMessage);
+
+        if (successStatus) {
+            res.json({ success: true, itinerary: itinerary });
+        } else {
+            res.status(500).json({ success: false, error: errorMessage });
+        }
+    }
+});
+
+/**
+ * Google 시트에 사용자 요청 및 Gemini API 결과를 기록합니다.
+ */
+async function recordToSheet(startTime, formData, itinerary, successStatus, apiErrorMessage = "") {
+    const endTime = new Date();
+    const processingTime = ((endTime.getTime() - startTime.getTime()) / 1000).toFixed(2) + '초'; // 초 단위
+
+    try {
+        const rowData = [
+            new Date().toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' }), // 한국 시간 기준으로 타임스탬프
+            formData.destination,
+            formData.numTravelers,
+            formData.gender,
+            formData.ageGroup,
+            formData.travelStyle,
+            formData.travelDays,
+            formData.budget,
+            itinerary,
+            processingTime,
+            successStatus ? '성공' : '실패', // 처리 상태 추가 (옵션)
+            apiErrorMessage // API 에러 메시지 추가 (옵션)
+        ];
+
+        await sheetsClient.spreadsheets.values.append({
+            spreadsheetId: GOOGLE_SHEETS_ID,
+            range: `${SHEET_NAME}!A:K`, // 시트 필드 구조에 맞게 범위 조정
+            valueInputOption: 'USER_ENTERED',
+            resource: {
+                values: [rowData],
+            },
+        });
+        console.log('Data successfully recorded to Google Sheet.');
+    } catch (error) {
+        console.error('Error recording data to Google Sheet:', error);
+    }
+}
+
+// 서버 시작
+app.listen(PORT, () => {
+    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`Open http://localhost:${PORT} in your browser.`);
+});
