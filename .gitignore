@@ -9,5 +9,5 @@ venv/
 # Secrets
 google-credentials.json
 .env
-*_code.txt
-*_index.txt
+# *_code.txt
+# *_index.txt

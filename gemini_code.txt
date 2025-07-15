@@ -1,0 +1,147 @@
+const SPREADSHEET_ID = '실제값'; // 구글 시트 ID
+const SHEET_NAME = '출력결과'; // 시트명
+const GEMINI_API_KEY = '실제값'; // Gemini API 키 (실제 배포 시에는 스크립트 속성으로 관리하는 것이 더 안전합니다)
+const GEMINI_MODEL = 'gemini-1.5-flash'; // 사용할 Gemini 모델
+
+/**
+ * 웹 앱을 실행할 때 HTML 파일을 제공합니다.
+ */
+function doGet() {
+  return HtmlService.createTemplateFromFile('index').evaluate()
+      .setTitle('스마트여행가이드')
+      .setFaviconUrl('https://www.google.com/s2/favicons?domain=travel.google.com'); // 여행 관련 파비콘
+}
+
+/**
+ * 클라이언트 측에서 호출할 수 있는 함수입니다.
+ * 여행 경로를 추천하고, 결과를 Google 시트에 기록합니다.
+ * @param {Object} formData 사용자 입력 데이터 객체
+ * @returns {Object} Gemini API의 추천 경로 또는 에러 메시지
+ */
+function recommendTravelItinerary(formData) {
+  const startTime = new Date(); // 처리 시작 시간 기록
+
+  try {
+    const destination = formData.destination;
+    const numTravelers = formData.numTravelers;
+    const gender = formData.gender;
+    const ageGroup = formData.ageGroup;
+    const travelStyle = formData.travelStyle;
+    const travelDays = formData.travelDays;
+    const budget = formData.budget;
+
+    // Gemini API에 보낼 프롬프트 생성
+    const prompt = `
+      "${destination}"(으)로 ${numTravelers}명의 ${gender}, ${ageGroup} ${travelStyle} 여행을 계획 중입니다.
+      총 ${travelDays}일 동안의 여행이며, 인당 예산은 ${budget}입니다.
+      각 일자별로 상세한 추천 여행 경로를 제공해주세요.
+      답변은 각 일자별로 제목을 포함하고, 활동, 식사, 숙소 등을 구체적으로 명시해주세요.
+      여행의 특징과 추천하는 이유를 간략하게 덧붙여주세요.
+      예시 형식:
+      ---
+      Day 1: [장소] 탐험
+      - 오전: [활동]
+      - 점심: [음식/장소]
+      - 오후: [활동]
+      - 저녁: [음식/장소]
+      - 숙소: [종류/이름]
+      특징: ...
+
+      Day 2: [장소] 즐기기
+      - 오전: ...
+      ---
+    `;
+
+    // Gemini API 호출
+    const response = callGeminiAPI(prompt);
+    let itinerary = "추천 경로를 생성할 수 없습니다. 다시 시도해주세요.";
+
+    if (response && response.candidates && response.candidates[0] && response.candidates[0].content && response.candidates[0].content.parts && response.candidates[0].content.parts[0]) {
+      itinerary = response.candidates[0].content.parts[0].text;
+    } else if (response && response.error) {
+        itinerary = `Gemini API 오류: ${response.error.message}`;
+    }
+
+    // Google 시트에 결과 기록
+    recordToSheet(startTime, destination, numTravelers, gender, ageGroup, travelStyle, travelDays, budget, itinerary);
+
+    return { success: true, itinerary: itinerary };
+
+  } catch (e) {
+    const errorMessage = `서버 오류 발생: ${e.message}`;
+    Logger.log(errorMessage);
+    // 오류 발생 시에도 시트에 기록
+    recordToSheet(startTime, formData.destination, formData.numTravelers, formData.gender, formData.ageGroup, formData.travelStyle, formData.travelDays, formData.budget, errorMessage);
+    return { success: false, error: errorMessage };
+  }
+}
+
+/**
+ * Gemini API를 호출합니다.
+ * @param {string} prompt Gemini API에 보낼 프롬프트
+ * @returns {Object} Gemini API 응답 JSON 객체
+ */
+function callGeminiAPI(prompt) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+  const options = {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify({
+      contents: [
+        {
+          parts: [
+            { text: prompt }
+          ]
+        }
+      ]
+    })
+  };
+
+  try {
+    const response = UrlFetchApp.fetch(url, options);
+    const jsonResponse = JSON.parse(response.getContentText());
+    Logger.log('Gemini API 응답: ' + JSON.stringify(jsonResponse));
+    return jsonResponse;
+  } catch (e) {
+    Logger.log('Gemini API 호출 오류: ' + e.message);
+    return { error: { message: `Gemini API 호출 중 오류가 발생했습니다: ${e.message}` } };
+  }
+}
+
+/**
+ * Google 시트에 사용자 요청 및 Gemini API 결과를 기록합니다.
+ * @param {Date} startTime 요청 처리 시작 시간
+ * @param {string} destination 여행 목적지
+ * @param {string} numTravelers 인원수
+ * @param {string} gender 성별
+ * @param {string} ageGroup 나이
+ * @param {string} travelStyle 여행 스타일
+ * @param {string} travelDays 여행 일수
+ * @param {string} budget 예산 규모
+ * @param {string} itinerary 추천 경로 결과
+ */
+function recordToSheet(startTime, destination, numTravelers, gender, ageGroup, travelStyle, travelDays, budget, itinerary) {
+  const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const sheet = spreadsheet.getSheetByName(SHEET_NAME);
+  if (!sheet) {
+    Logger.log(`오류: 시트 '${SHEET_NAME}'를 찾을 수 없습니다.`);
+    return;
+  }
+
+  const endTime = new Date(); // 처리 종료 시간 기록
+  const processingTime = (endTime.getTime() - startTime.getTime()) / 1000; // 초 단위
+
+  sheet.appendRow([
+    new Date(), // 타임스탬프
+    destination,
+    numTravelers,
+    gender,
+    ageGroup,
+    travelStyle,
+    travelDays,
+    budget,
+    itinerary,
+    processingTime.toFixed(2) + '초' // 처리 시간
+  ]);
+  Logger.log('데이터가 시트에 성공적으로 기록되었습니다.');
+}

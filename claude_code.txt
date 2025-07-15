@@ -1,0 +1,180 @@
+// 구글 시트 ID와 Gemini API 키 설정
+const SPREADSHEET_ID = '실제값';
+const GEMINI_API_KEY = '실제값';
+const SHEET_NAME = '출력결과';
+
+// HTML 페이지 제공
+function doGet() {
+  return HtmlService.createHtmlOutputFromFile('index')
+    .setTitle('스마트여행가이드')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
+// 여행 경로 추천 메인 함수
+function getTravelRecommendation(formData) {
+  const startTime = new Date().getTime();
+  
+  try {
+    // Gemini API로 여행 경로 추천 요청
+    const recommendation = callGeminiAPI(formData);
+    
+    // 구글 시트에 결과 저장
+    const processingTime = (new Date().getTime() - startTime) / 1000;
+    saveToSheet(formData, recommendation, processingTime);
+    
+    return {
+      success: true,
+      data: recommendation,
+      processingTime: processingTime
+    };
+    
+  } catch (error) {
+    console.error('Error in getTravelRecommendation:', error);
+    return {
+      success: false,
+      error: error.toString()
+    };
+  }
+}
+
+// Gemini API 호출 함수
+function callGeminiAPI(formData) {
+  const prompt = createPrompt(formData);
+  
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${GEMINI_API_KEY}`;
+  
+  const payload = {
+    contents: [{
+      parts: [{
+        text: prompt
+      }]
+    }],
+    generationConfig: {
+      temperature: 0.7,
+      topK: 40,
+      topP: 0.95,
+      maxOutputTokens: 2048,
+    }
+  };
+  
+  const options = {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    payload: JSON.stringify(payload)
+  };
+  
+  try {
+    const response = UrlFetchApp.fetch(url, options);
+    const responseData = JSON.parse(response.getContentText());
+    
+    if (responseData.candidates && responseData.candidates.length > 0) {
+      return responseData.candidates[0].content.parts[0].text;
+    } else {
+      throw new Error('Gemini API에서 응답을 받지 못했습니다.');
+    }
+  } catch (error) {
+    console.error('Gemini API 호출 오류:', error);
+    throw new Error('AI 서비스 연결에 실패했습니다. 잠시 후 다시 시도해주세요.');
+  }
+}
+
+// 프롬프트 생성 함수
+function createPrompt(formData) {
+  const { destination, people, gender, age, style, days, budget } = formData;
+  
+  return `
+당신은 전문 여행 가이드입니다. 다음 조건에 맞는 상세한 여행 일정을 추천해주세요.
+
+**여행 정보:**
+- 목적지: ${destination}
+- 인원수: ${people}명
+- 성별: ${gender}
+- 나이: ${age}
+- 여행 스타일: ${style}
+- 여행 일수: ${days}일
+- 예산: ${budget}
+
+**요청사항:**
+1. 각 일차별로 구체적인 일정을 제시해주세요.
+2. 시간대별 추천 장소와 활동을 포함해주세요.
+3. 예산에 맞는 숙박, 식사, 교통 정보를 포함해주세요.
+4. 해당 지역의 특색있는 명소와 체험을 추천해주세요.
+5. 실용적인 팁과 주의사항을 포함해주세요.
+
+**출력 형식:**
+다음과 같은 형식으로 답변해주세요:
+
+## 📍 ${destination} ${days}일 여행 코스
+
+### 🗓️ 1일차
+**오전 (9:00-12:00)**
+- 장소: [구체적인 장소명]
+- 활동: [활동 내용]
+- 예상 비용: [비용]
+
+**오후 (13:00-18:00)**
+- 장소: [구체적인 장소명]
+- 활동: [활동 내용]
+- 예상 비용: [비용]
+
+**저녁 (19:00-22:00)**
+- 장소: [구체적인 장소명]
+- 활동: [활동 내용]
+- 예상 비용: [비용]
+
+(${days}일까지 반복)
+
+### 💡 여행 팁
+- [실용적인 팁 3-5개]
+
+### 📝 주의사항
+- [주의사항 2-3개]
+
+### 💰 예상 총 비용
+- [항목별 예상 비용 정리]
+
+한국어로 친근하고 상세하게 답변해주세요.
+`;
+}
+
+// 구글 시트에 데이터 저장 함수
+function saveToSheet(formData, recommendation, processingTime) {
+  try {
+    const sheet = SpreadsheetApp.openById(SPREADSHEET_ID).getSheetByName(SHEET_NAME);
+    
+    if (!sheet) {
+      throw new Error('지정된 시트를 찾을 수 없습니다.');
+    }
+    
+    const timestamp = new Date();
+    const row = [
+      timestamp,
+      formData.destination,
+      formData.people,
+      formData.gender,
+      formData.age,
+      formData.style,
+      formData.days,
+      formData.budget,
+      recommendation,
+      processingTime
+    ];
+    
+    sheet.appendRow(row);
+    
+  } catch (error) {
+    console.error('시트 저장 오류:', error);
+    throw new Error('데이터 저장에 실패했습니다.');
+  }
+}
+
+// 에러 처리 함수
+function handleError(error) {
+  console.error('Application Error:', error);
+  return {
+    success: false,
+    error: '서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요.'
+  };
+}
